@@ -887,7 +887,7 @@
                 } else {
                     document.getElementById('waitingText').textContent = 'Waiting for opponent to initialize game...';
                     let pollAttempts = 0;
-                    const maxPolls = 60; // 30 seconds timeout (60 * 500ms)
+                    const maxPolls = 60;
                     let interval;
                     
                     const checkGameState = () => {
@@ -906,7 +906,6 @@
                     
                     interval = setInterval(checkGameState, 500);
                     
-                    // Also listen for storage changes immediately
                     const storageListener = (e) => {
                         if (e.key === GAME_STATE_KEY) {
                             const newState = readGameState();
@@ -1046,37 +1045,12 @@
             const hand = getMyHand(state);
             const card = hand[index];
             if (!card || card.type === CARD_TYPES.EXPLODING) return;
-            if (card.type === CARD_TYPES.DEFUSE && !hand.some(c => c.type === CARD_TYPES.EXPLODING)) return;
+
             if (selectedCardIndices.has(index)) {
                 selectedCardIndices.delete(index);
             } else {
                 selectedCardIndices.add(index);
             }
-            renderUI(state);
-        }
-
-        function giveCardForFavor(index) {
-            const state = readGameState();
-            // Only opponent can give a card
-            if (myPlayerNum === state.favorFromPlayer) return;
-            
-            const opponentHand = getOpponentHand(state);
-            const myHand = getMyHand(state);
-            
-            if (index < 0 || index >= myHand.length) return;
-
-            const givenCard = myHand.splice(index, 1)[0];
-            opponentHand.push(givenCard);
-            setMyHand(state, myHand);
-            setOpponentHand(state, opponentHand);
-            
-            // Clear favor state - the player who played the favor continues their turn
-            state.favorCardActive = false;
-            const playerName = state.favorFromPlayer === 1 ? state.player1Name : state.player2Name;
-            state.message = `${playerName} used FAVOR and received a card!`;
-            state.messageType = 'success';
-            
-            writeGameState(state);
             renderUI(state);
         }
 
@@ -1086,188 +1060,223 @@
             if (!isMyTurn(state)) return;
 
             const myHand = getMyHand(state);
-            const combo = getValidCombo(selectedCardIndices, myHand);
-            if (!combo) return;
+            const validCombo = getValidCombo(selectedCardIndices, myHand);
 
-            const sortedIndices = [...selectedCardIndices].sort((a, b) => b - a);
-
-            if (combo === 'single') {
-                const card = myHand.splice(sortedIndices[0], 1)[0];
-                state.playedPile.push(card);
-                const effect = executeCardEffect(card.type, state);
-                selectedCardIndices.clear();
-
-                const opponentNum = myPlayerNum === 1 ? 2 : 1;
-                if (effect === 'attack') {
-                    state.currentPlayer = opponentNum;
-                    state.turnsRemaining = 2;
-                    state.message = `${getMyName(state)} played ATTACK! ${getOpponentName(state)} must take 2 turns!`;
-                    state.messageType = 'danger';
-                } else if (effect === 'skip') {
-                    state.turnsRemaining--;
-                    if (state.turnsRemaining > 0) {
-                        state.message = `${getMyName(state)} played SKIP! Skipped one draw, still has turns remaining!`;
-                        state.messageType = 'info';
-                    } else {
-                        state.currentPlayer = opponentNum;
-                        state.turnsRemaining = 1;
-                        state.message = `${getMyName(state)} played SKIP! Turn ended without drawing!`;
-                        state.messageType = 'info';
-                    }
-                } else if (effect === 'shuffle') {
-                    state.message = `${getMyName(state)} played SHUFFLE! Deck reshuffled!`;
-                    state.messageType = 'info';
-                } else if (effect === 'peek') {
-                    state.message = `${getMyName(state)} played See the Future`;
-                    state.messageType = 'info';
-                } else if (effect === 'favor') {
-                    state.message = `${getMyName(state)} played FAVOR!`;
-                    state.messageType = 'success';
-                } else {
-                    state.message = `${getMyName(state)} played ${card.type}`;
-                    state.messageType = 'success';
-                }
-                setMyHand(state, myHand);
-                writeGameState(state);
-                renderUI(state);
-            } else if (combo === 'pair') {
-                executePairCombo(state, myHand, sortedIndices);
-            } else if (combo === 'triple') {
-                executeTripleCombo(state, myHand, sortedIndices);
-            } else if (combo === 'fiveCombo') {
-                executeFiveCombo(state, myHand, sortedIndices);
-            }
-        }
-
-        function executePairCombo(state, myHand, sortedIndices) {
-            const opponentHand = getOpponentHand(state);
-            for (const i of sortedIndices) state.playedPile.push(myHand.splice(i, 1)[0]);
-
-            if (opponentHand.length === 0) {
-                selectedCardIndices.clear();
-                state.message = `${getMyName(state)} played a Cat Pair but opponent has no cards!`;
-                state.messageType = 'info';
-                setMyHand(state, myHand);
-                writeGameState(state);
-                renderUI(state);
+            if (!validCombo) {
+                alert('Invalid combo!');
                 return;
             }
 
-            const stolenCard = opponentHand.splice(Math.floor(Math.random() * opponentHand.length), 1)[0];
-            myHand.push(stolenCard);
+            // Remove played cards from hand
+            const playedCards = [...selectedCardIndices].sort((a, b) => b - a).map(i => myHand[i]);
+            [...selectedCardIndices].sort((a, b) => b - a).forEach(i => {
+                myHand.splice(i, 1);
+            });
+
+            // Add to played pile
+            state.playedPile.push(...playedCards);
+
+            // Handle combo effects
+            if (validCombo === 'triple') {
+                handleTripleCombo(state);
+                setMyHand(state, myHand);
+                writeGameState(state);
+                return;
+            } else if (validCombo === 'pair') {
+                const opponentHand = getOpponentHand(state);
+                if (opponentHand.length > 0) {
+                    const randIdx = Math.floor(Math.random() * opponentHand.length);
+                    const stolenCard = opponentHand.splice(randIdx, 1)[0];
+                    myHand.push(stolenCard);
+                    state.message = `${getMyName(state)} played a pair! Stole ${stolenCard.type}!`;
+                    state.messageType = 'success';
+                    setOpponentHand(state, opponentHand);
+                }
+            } else if (validCombo === 'fiveCombo') {
+                handleFiveCombo(state);
+                setMyHand(state, myHand);
+                writeGameState(state);
+                return;
+            } else if (validCombo === 'single') {
+                const card = playedCards[0];
+                executeCardEffect(card.type, state);
+                state.message = `${getMyName(state)} played ${card.type}`;
+                state.messageType = 'success';
+            }
+
             selectedCardIndices.clear();
-            localPeekMessage = `Cat Pair! You randomly stole: ${getCardEmoji(stolenCard.type)} ${stolenCard.type}`;
-            state.message = `${getMyName(state)} played a Cat Pair and randomly stole a card!`;
-            state.messageType = 'success';
+            state.turnsRemaining--;
+            if (state.turnsRemaining <= 0) {
+                const opponentNum = myPlayerNum === 1 ? 2 : 1;
+                state.currentPlayer = opponentNum;
+                state.turnsRemaining = 1;
+            }
+
             setMyHand(state, myHand);
-            setOpponentHand(state, opponentHand);
             writeGameState(state);
             renderUI(state);
         }
 
-        function executeTripleCombo(state, myHand, sortedIndices) {
-            pendingComboData = { state, myHand, sortedIndices };
+        function handleTripleCombo(state) {
+            const opponentHand = getOpponentHand(state);
+            
+            // Find unique card types in opponent's hand
+            const uniqueTypes = [...new Set(opponentHand.map(c => c.type))].filter(t => STEALABLE_TYPES.includes(t));
+
+            if (uniqueTypes.length === 0) {
+                state.message = 'Opponent has no stealable cards!';
+                state.messageType = 'info';
+                return;
+            }
+
+            // Store combo data to use when modal is responded to
+            pendingComboData = {
+                type: 'triple',
+                availableTypes: uniqueTypes,
+                state: JSON.parse(JSON.stringify(state))
+            };
+
+            // Show modal with unique card types
+            const modal = document.getElementById('tripleComboModal');
             const choicesDiv = document.getElementById('tripleCardChoices');
             choicesDiv.innerHTML = '';
-            for (const type of STEALABLE_TYPES) {
+
+            uniqueTypes.forEach(cardType => {
                 const btn = document.createElement('button');
                 btn.className = 'combo-choice-btn';
-                btn.textContent = getCardEmoji(type) + ' ' + type;
-                btn.onclick = () => resolveTripleCombo(type);
+                btn.textContent = cardType;
+                btn.onclick = () => executeTripleComboChoice(cardType);
                 choicesDiv.appendChild(btn);
-            }
-            document.getElementById('tripleComboModal').classList.add('active');
+            });
+
+            modal.classList.add('active');
         }
 
-        function resolveTripleCombo(namedType) {
-            document.getElementById('tripleComboModal').classList.remove('active');
-            const { state, myHand, sortedIndices } = pendingComboData;
-            pendingComboData = null;
-            const opponentHand = getOpponentHand(state);
-            for (const i of sortedIndices) state.playedPile.push(myHand.splice(i, 1)[0]);
+        function executeTripleComboChoice(selectedCardType) {
+            if (!pendingComboData || pendingComboData.type !== 'triple') return;
 
-            const cardIdx = opponentHand.findIndex(c => c.type === namedType);
-            if (cardIdx !== -1) {
-                myHand.push(opponentHand.splice(cardIdx, 1)[0]);
-                localPeekMessage = `Three of a Kind! Stole: ${getCardEmoji(namedType)} ${namedType}`;
-                state.message = `${getMyName(state)} played Three of a Kind and stole a ${namedType}!`;
+            const state = readGameState();
+            const opponentHand = getOpponentHand(state);
+            const myHand = getMyHand(state);
+
+            // Find the first card of the selected type in opponent's hand
+            const cardIndex = opponentHand.findIndex(c => c.type === selectedCardType);
+            
+            if (cardIndex !== -1) {
+                const stolenCard = opponentHand.splice(cardIndex, 1)[0];
+                myHand.push(stolenCard);
+                
+                state.message = `${getMyName(state)} played a triple! Stole a ${selectedCardType}!`;
                 state.messageType = 'success';
+                
                 setOpponentHand(state, opponentHand);
-            } else {
-                localPeekMessage = `Three of a Kind! Opponent had no ${namedType}.`;
-                state.message = `${getMyName(state)} played Three of a Kind — opponent had no ${namedType}!`;
-                state.messageType = 'info';
+                setMyHand(state, myHand);
             }
+
+            // End turn
+            state.turnsRemaining--;
+            if (state.turnsRemaining <= 0) {
+                const opponentNum = myPlayerNum === 1 ? 2 : 1;
+                state.currentPlayer = opponentNum;
+                state.turnsRemaining = 1;
+            }
+
             selectedCardIndices.clear();
-            setMyHand(state, myHand);
+            pendingComboData = null;
             writeGameState(state);
+            
+            // Close modal
+            document.getElementById('tripleComboModal').classList.remove('active');
             renderUI(state);
         }
 
-        function executeFiveCombo(state, myHand, sortedIndices) {
-            const stealable = state.playedPile
-                .map((c, i) => ({ card: c, idx: i }))
-                .filter(({ card }) => card.type !== CARD_TYPES.EXPLODING);
+        function handleFiveCombo(state) {
+            const playedPile = state.playedPile;
 
-            if (stealable.length === 0) {
-                for (const i of sortedIndices) state.playedPile.push(myHand.splice(i, 1)[0]);
-                selectedCardIndices.clear();
-                state.message = `${getMyName(state)} played Five Different Cats — discard pile has nothing stealable!`;
+            if (playedPile.length === 0) {
+                state.message = 'Discard pile is empty!';
                 state.messageType = 'info';
-                setMyHand(state, myHand);
-                writeGameState(state);
-                renderUI(state);
                 return;
             }
 
-            pendingComboData = { state, myHand, sortedIndices };
+            pendingComboData = {
+                type: 'fiveCombo',
+                playedPile: playedPile,
+                state: JSON.parse(JSON.stringify(state))
+            };
+
+            const modal = document.getElementById('fiveComboModal');
             const choicesDiv = document.getElementById('fiveCardChoices');
             choicesDiv.innerHTML = '';
-            const seen = new Set();
-            for (const { card, idx } of [...stealable].reverse()) {
-                if (seen.has(card.type)) continue;
-                seen.add(card.type);
+
+            playedPile.forEach((card, index) => {
                 const btn = document.createElement('button');
                 btn.className = 'combo-choice-btn';
-                btn.textContent = getCardEmoji(card.type) + ' ' + card.type;
-                btn.onclick = () => resolveFiveCombo(idx);
+                btn.textContent = card.type;
+                btn.onclick = () => executeFiveComboChoice(index);
                 choicesDiv.appendChild(btn);
-            }
-            document.getElementById('fiveComboModal').classList.add('active');
+            });
+
+            modal.classList.add('active');
         }
 
-        function resolveFiveCombo(pileIndex) {
-            document.getElementById('fiveComboModal').classList.remove('active');
-            const { state, myHand, sortedIndices } = pendingComboData;
-            pendingComboData = null;
-            for (const i of sortedIndices) state.playedPile.push(myHand.splice(i, 1)[0]);
-            const stolenCard = state.playedPile.splice(pileIndex, 1)[0];
-            myHand.push(stolenCard);
+        function executeFiveComboChoice(cardIndex) {
+            if (!pendingComboData || pendingComboData.type !== 'fiveCombo') return;
+
+            const state = readGameState();
+            const myHand = getMyHand(state);
+            const playedPile = state.playedPile;
+
+            if (cardIndex >= 0 && cardIndex < playedPile.length) {
+                const selectedCard = playedPile.splice(cardIndex, 1)[0];
+                myHand.push(selectedCard);
+
+                state.message = `${getMyName(state)} played 5 different cats! Took a ${selectedCard.type}!`;
+                state.messageType = 'success';
+
+                setMyHand(state, myHand);
+            }
+
+            // End turn
+            state.turnsRemaining--;
+            if (state.turnsRemaining <= 0) {
+                const opponentNum = myPlayerNum === 1 ? 2 : 1;
+                state.currentPlayer = opponentNum;
+                state.turnsRemaining = 1;
+            }
+
             selectedCardIndices.clear();
-            localPeekMessage = `Five Different Cats! Stole from discard: ${getCardEmoji(stolenCard.type)} ${stolenCard.type}`;
-            state.message = `${getMyName(state)} played Five Different Cats and stole ${stolenCard.type} from the discard!`;
-            state.messageType = 'success';
-            setMyHand(state, myHand);
+            pendingComboData = null;
             writeGameState(state);
+
+            // Close modal
+            document.getElementById('fiveComboModal').classList.remove('active');
             renderUI(state);
         }
 
         function cancelCombo(modalId) {
             document.getElementById(modalId).classList.remove('active');
             pendingComboData = null;
-            selectedCardIndices.clear();
-            renderUI(readGameState());
+            // Reset game state - reshuffle played cards back to hand
+            const state = readGameState();
+            renderUI(state);
         }
 
         function executeCardEffect(cardType, state) {
-            if (cardType === CARD_TYPES.ATTACK) return 'attack';
-            if (cardType === CARD_TYPES.SKIP) return 'skip';
-
+            if (cardType === CARD_TYPES.ATTACK) {
+                const opponentNum = myPlayerNum === 1 ? 2 : 1;
+                state.currentPlayer = opponentNum;
+                state.turnsRemaining = 2;
+                return;
+            }
+            if (cardType === CARD_TYPES.SKIP) {
+                state.turnsRemaining--;
+                return;
+            }
             if (cardType === CARD_TYPES.SHUFFLE) {
                 state.deck = shuffleArray(state.deck);
-                return 'shuffle';
+                return;
             }
-
             if (cardType === CARD_TYPES.PEEK) {
                 const topCards = state.deck.slice(-Math.min(3, state.deck.length)).reverse();
                 if (topCards.length > 0) {
@@ -1276,17 +1285,8 @@
                 } else {
                     localPeekMessage = 'The deck is empty!';
                 }
-                return 'peek';
+                return;
             }
-
-            if (cardType === CARD_TYPES.FAVOR) {
-                // Set state to wait for opponent to choose a card
-                state.favorCardActive = true;
-                state.favorFromPlayer = state.currentPlayer;
-                return 'favor';
-            }
-
-            return null;
         }
 
         function drawAndEndTurn() {
@@ -1314,7 +1314,6 @@
                     myHand.splice(ekIdx, 1);
                     const pos = Math.floor(Math.random() * (state.deck.length + 1));
                     state.deck.splice(pos, 0, card);
-                    localPeekMessage = `You drew: 💣 Exploding Kitten! Used 🧯 Defuse — survived!`;
                     state.message = `${getMyName(state)} drew an Exploding Kitten! Used Defuse!`;
                     state.messageType = 'warning';
                 } else {
@@ -1331,7 +1330,6 @@
                     return;
                 }
             } else {
-                localPeekMessage = `You drew: ${getCardEmoji(card.type)} ${card.type}`;
                 state.message = `${getMyName(state)} drew a card`;
                 state.messageType = 'info';
             }
@@ -1351,76 +1349,22 @@
             renderUI(state);
         }
 
-        function showGameOver(winnerName, playerWon) {
-            const modal = document.getElementById('gameOverModal');
-            const title = document.getElementById('gameOverTitle');
-            const message = document.getElementById('gameOverMessage');
-            if (playerWon) {
-                title.textContent = 'You Win!';
-                message.textContent = 'Congratulations! You survived the Exploding Kittens!';
-            } else {
-                title.textContent = 'Game Over';
-                message.textContent = `${winnerName} has won! Better luck next time!`;
-            }
-            modal.classList.add('active');
-        }
-
-        function goHome() {
-            localStorage.removeItem(GAME_META_KEY);
-            localStorage.removeItem(GAME_STATE_KEY);
-            window.location.href = 'onlineconnecter.html';
-        }
-
-        function showMessage(text, type) {
-            const el = document.getElementById('gameMessage');
-            el.textContent = text;
-            el.className = 'game-message ' + (type || 'info');
-        }
-
-        function getCardClass(cardType) {
-            switch(cardType) {
-                case CARD_TYPES.EXPLODING: return 'exploding';
-                case CARD_TYPES.DEFUSE: return 'defuse';
-                case CARD_TYPES.SKIP: return 'skip';
-                case CARD_TYPES.ATTACK: return 'attack';
-                case CARD_TYPES.FAVOR: return 'favor';
-                case CARD_TYPES.SHUFFLE: return 'shuffle';
-                case CARD_TYPES.PEEK: return 'peek';
-                case CARD_TYPES.NOPE: return 'nope';
-                case CARD_TYPES.TACOCAT: return 'tacocat';
-                case CARD_TYPES.CATTERMELON: return 'cattermelon';
-                case CARD_TYPES.BEARD_CAT: return 'beard-cat';
-                case CARD_TYPES.HAIRY_POTATO_CAT: return 'hairy-potato';
-                case CARD_TYPES.RAINBOW_CAT: return 'rainbow-cat';
-                default: return '';
-            }
-        }
-
-        function getCardEmoji(cardType) {
-            switch(cardType) {
-                case CARD_TYPES.EXPLODING: return '💣';
-                case CARD_TYPES.DEFUSE: return '🧯';
-                case CARD_TYPES.SKIP: return '⏭️';
-                case CARD_TYPES.ATTACK: return '⚔️';
-                case CARD_TYPES.FAVOR: return '🙏';
-                case CARD_TYPES.SHUFFLE: return '🔀';
-                case CARD_TYPES.PEEK: return '👀';
-                case CARD_TYPES.NOPE: return '🚫';
-                case CARD_TYPES.TACOCAT: return '🟣';
-                case CARD_TYPES.CATTERMELON: return '🍉';
-                case CARD_TYPES.BEARD_CAT: return '🧔';
-                case CARD_TYPES.HAIRY_POTATO_CAT: return '🥔';
-                case CARD_TYPES.RAINBOW_CAT: return '🌈';
-                default: return '🎴';
-            }
-        }
-
         function renderUI(state) {
-            if (!state) return;
+            document.getElementById('turnIndicator').textContent = 
+                state.currentPlayer === myPlayerNum ? '🟢 Your Turn' : '🔴 Opponent\'s Turn';
+            document.getElementById('turnIndicator').className = 
+                state.currentPlayer === myPlayerNum ? 'turn-indicator your-turn' : 'turn-indicator opponent-turn';
+
+            document.getElementById('gameMessage').textContent = state.message || '';
+            document.getElementById('gameMessage').className = 'game-message ' + (state.messageType || 'info');
+            
+            if (localPeekMessage) {
+                document.getElementById('gameMessage').textContent = localPeekMessage;
+                document.getElementById('gameMessage').className = 'game-message info';
+            }
 
             const myHand = getMyHand(state);
             const opponentHand = getOpponentHand(state);
-            const myTurn = isMyTurn(state);
 
             document.getElementById('playerHandCount').textContent = myHand.length;
             document.getElementById('opponentHandCount').textContent = opponentHand.length;
@@ -1429,94 +1373,65 @@
 
             if (state.playedPile.length > 0) {
                 const lastCard = state.playedPile[state.playedPile.length - 1];
-                document.getElementById('playedCardType').textContent = getCardEmoji(lastCard.type);
-            }
-
-            document.getElementById('playerStatus').textContent = myTurn ? 'Active' : 'Waiting';
-            document.getElementById('opponentStatus').textContent = myTurn ? 'Waiting' : 'Active';
-
-            const turnIndicator = document.getElementById('turnIndicator');
-            const isFavorActive = state.favorCardActive && myPlayerNum !== state.favorFromPlayer;
-            
-            if (isFavorActive) {
-                const playerName = state.favorFromPlayer === 1 ? state.player1Name : state.player2Name;
-                turnIndicator.textContent = `${playerName} played FAVOR! Choose a card to give them!`;
-                turnIndicator.className = 'turn-indicator warning';
-            } else if (myTurn) {
-                if (state.turnsRemaining > 1) {
-                    turnIndicator.textContent = `YOU ARE ATTACKED! ${state.turnsRemaining} turns remaining!`;
-                } else {
-                    turnIndicator.textContent = 'Your Turn - Play cards (optional), then draw!';
-                }
-                turnIndicator.className = 'turn-indicator your-turn';
+                document.getElementById('playedCardType').textContent = lastCard.type;
             } else {
-                turnIndicator.textContent = `${getOpponentName(state)}'s Turn`;
-                turnIndicator.className = 'turn-indicator opponent-turn';
+                document.getElementById('playedCardType').textContent = '—';
             }
-
-            if (localPeekMessage) {
-                showMessage(localPeekMessage, 'info');
-                localPeekMessage = null;
-            } else {
-                showMessage(state.message || '', state.messageType || 'info');
-            }
-
-            const combo = getValidCombo(selectedCardIndices, myHand);
-            const playBtn = document.getElementById('playCardBtn');
-            playBtn.disabled = !myTurn || combo === null || state.favorCardActive;
-            playBtn.textContent = combo === 'pair' ? 'Play Cat Pair'
-                : combo === 'triple' ? 'Play Three Cats'
-                : combo === 'fiveCombo' ? 'Play Five Cats'
-                : 'Play Card';
-            document.getElementById('drawCardBtn').disabled = !myTurn || state.favorCardActive;
-            document.getElementById('drawDeckBtn').style.pointerEvents = (myTurn && !state.favorCardActive) ? 'auto' : 'none';
-            document.getElementById('drawDeckBtn').style.opacity = (myTurn && !state.favorCardActive) ? '1' : '0.5';
 
             const cardsDiv = document.getElementById('playerCards');
             cardsDiv.innerHTML = '';
-            
-            if (isFavorActive) {
-                // Show opponent's cards for them to choose from for Favor
-                const handLabel = document.createElement('div');
-                handLabel.className = 'hand-label';
-                handLabel.textContent = 'Choose a card to give:';
-                cardsDiv.parentElement.querySelector('.hand-label').textContent = 'Choose a card to give:';
-                
-                myHand.forEach((card, index) => {
-                    const cardDiv = document.createElement('div');
-                    cardDiv.className = 'card ' + getCardClass(card.type);
-                    cardDiv.textContent = getCardEmoji(card.type) + '\n' + card.type.substring(0, 8);
-                    cardDiv.onclick = () => giveCardForFavor(index);
-                    cardDiv.style.cursor = 'pointer';
-                    cardsDiv.appendChild(cardDiv);
-                });
+            myHand.forEach((card, index) => {
+                const cardEl = document.createElement('div');
+                cardEl.className = 'card ' + getCardClass(card.type);
+                if (selectedCardIndices.has(index)) cardEl.classList.add('selected');
+                if (card.type === CARD_TYPES.EXPLODING) cardEl.classList.add('disabled');
+                cardEl.textContent = card.type;
+                cardEl.onclick = () => selectCard(index);
+                cardsDiv.appendChild(cardEl);
+            });
+
+            if (myHand.length === 0) {
+                cardsDiv.innerHTML = '<div class="empty-message">No cards in hand</div>';
+            }
+
+            document.getElementById('playCardBtn').disabled = !isMyTurn(state) || selectedCardIndices.size === 0;
+            document.getElementById('drawCardBtn').disabled = !isMyTurn(state);
+
+            if (state.gameOver) {
+                showGameOver(state);
+            }
+        }
+
+        function getCardClass(type) {
+            const lowerType = type.toLowerCase().replace(/\s+/g, '-');
+            if (lowerType.includes('tacocat')) return 'tacocat';
+            if (lowerType.includes('cattermelon')) return 'cattermelon';
+            if (lowerType.includes('beard')) return 'beard-cat';
+            if (lowerType.includes('potato')) return 'hairy-potato';
+            if (lowerType.includes('rainbow')) return 'rainbow-cat';
+            return lowerType;
+        }
+
+        function showGameOver(state) {
+            const modal = document.getElementById('gameOverModal');
+            const title = document.getElementById('gameOverTitle');
+            const message = document.getElementById('gameOverMessage');
+
+            if (state.winner === myPlayerNum) {
+                title.textContent = '🎉 You Won!';
+                message.textContent = `${getMyName(state)} wins the game!`;
             } else {
-                // Show my own cards
-                cardsDiv.parentElement.querySelector('.hand-label').textContent = 'Your Hand';
-                myHand.forEach((card, index) => {
-                    const cardDiv = document.createElement('div');
-                    cardDiv.className = 'card ' + getCardClass(card.type);
-                    if (selectedCardIndices.has(index)) cardDiv.classList.add('selected');
-                    cardDiv.textContent = getCardEmoji(card.type) + '\n' + card.type.substring(0, 8);
-
-                    const canSelect = myTurn && card.type !== CARD_TYPES.EXPLODING &&
-                        !(card.type === CARD_TYPES.DEFUSE && !myHand.some(c => c.type === CARD_TYPES.EXPLODING));
-
-                    if (canSelect) {
-                        cardDiv.onclick = () => selectCard(index);
-                        cardDiv.style.cursor = 'pointer';
-                    } else {
-                        cardDiv.classList.add('disabled');
-                    }
-
-                    cardsDiv.appendChild(cardDiv);
-                });
+                title.textContent = '😢 Game Over';
+                message.textContent = `${getOpponentName(state)} wins the game!`;
             }
 
-            if (state.gameOver && state.winner) {
-                const winnerName = state.winner === 1 ? state.player1Name : state.player2Name;
-                showGameOver(winnerName, state.winner === myPlayerNum);
-            }
+            modal.classList.add('active');
+        }
+
+        function goHome() {
+            localStorage.removeItem(GAME_STATE_KEY);
+            localStorage.removeItem(GAME_META_KEY);
+            window.location.href = 'onlineconnecter.html';
         }
 
         window.addEventListener('load', initGame);
