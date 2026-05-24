@@ -1452,12 +1452,36 @@
             return null;
         }
 
+        // ── favor give ────────────────────────────────────────────────────────
+
+        function giveCardForFavor(index) {
+            const state = readGameState();
+            if (!state.favorCardActive) return;
+            if (myPlayerNum === state.favorFromPlayer) return;
+            const myHand = getMyHand(state);
+            if (index < 0 || index >= myHand.length) return;
+            const opponentHand = getOpponentHand(state);
+            const givenCard = myHand.splice(index, 1)[0];
+            opponentHand.push(givenCard);
+            setMyHand(state, myHand);
+            setOpponentHand(state, opponentHand);
+            const favorPlayer = state.favorFromPlayer;
+            state.favorCardActive = false;
+            state.favorFromPlayer = null;
+            const playerName = favorPlayer === 1 ? state.player1Name : state.player2Name;
+            state.message = `${playerName} received a card from FAVOR!`;
+            state.messageType = 'success';
+            writeGameState(state);
+            renderUI(state);
+        }
+
         // ── draw & defuse ──────────────────────────────────────────────────────
 
         function drawAndEndTurn() {
             const state = readGameState();
             if (!isMyTurn(state)) return;
             if (state.pendingAction && !state.pendingAction.resolved) return;
+            if (state.favorCardActive) return;
 
             if (state.deck.length === 0) {
                 state.message = 'Deck is empty!';
