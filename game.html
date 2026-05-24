@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -567,6 +567,26 @@
             background: #764ba2;
         }
 
+        .face-down-card {
+            width: 60px;
+            height: 84px;
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            border: 2px solid #667eea;
+            border-radius: 8px;
+            font-size: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.15s, border-color 0.15s;
+            padding: 0;
+        }
+
+        .face-down-card:hover {
+            transform: translateY(-6px) scale(1.05);
+            border-color: #ffd700;
+            background: linear-gradient(135deg, #34495e 0%, #4a6278 100%);
+        }
+
         .combo-cancel-btn {
             background: #e74c3c;
             color: white;
@@ -774,11 +794,44 @@
         </div>
     </div>
 
+    <!-- Defuse Position Modal -->
+    <div class="combo-modal" id="defuseModal">
+        <div class="combo-modal-content">
+            <h3>🧯 You Drew an Exploding Kitten!</h3>
+            <p>You used a Defuse card. Choose where to bury the Exploding Kitten in the deck:</p>
+            <p id="defusePositionLabel" style="font-size:18px;font-weight:bold;margin:16px 0 8px;">Position 1 — Top (drawn next)</p>
+            <input
+                type="range"
+                id="defusePositionSlider"
+                min="1" max="16" value="8"
+                style="width:100%;margin-bottom:6px;cursor:pointer;"
+                oninput="updateDefuseLabel()"
+            >
+            <div style="display:flex;justify-content:space-between;font-size:12px;opacity:0.7;margin-bottom:20px;">
+                <span>1 — Top (drawn next)</span>
+                <span>Bottom</span>
+            </div>
+            <button class="combo-choice-btn" onclick="confirmDefusePosition()" style="width:100%;padding:12px;font-size:15px;">
+                Place Exploding Kitten
+            </button>
+        </div>
+    </div>
+
+    <!-- Pair Combo Modal -->
+    <div class="combo-modal" id="pairComboModal">
+        <div class="combo-modal-content">
+            <h3>🐱 Cat Pair!</h3>
+            <p>Click any face-down card to steal it from your opponent's hand:</p>
+            <div class="combo-choices" id="pairCardChoices"></div>
+            <button class="combo-cancel-btn" onclick="cancelCombo('pairComboModal')">Cancel</button>
+        </div>
+    </div>
+
     <!-- Triple Combo Modal -->
     <div class="combo-modal" id="tripleComboModal">
         <div class="combo-modal-content">
             <h3>🐱 Three of a Kind!</h3>
-            <p>Name the card you want to steal from your opponent's hand:</p>
+            <p>Choose a card to steal from your opponent's hand:</p>
             <div class="combo-choices" id="tripleCardChoices"></div>
             <button class="combo-cancel-btn" onclick="cancelCombo('tripleComboModal')">Cancel</button>
         </div>
@@ -794,7 +847,21 @@
         </div>
     </div>
 
+    <!-- Nope Modal -->
+    <div class="combo-modal" id="nopeModal">
+        <div class="combo-modal-content">
+            <h3>🚫 Nope?</h3>
+            <p id="nopeActionDesc" style="font-size:15px;font-weight:bold;margin-bottom:8px;"></p>
+            <p style="font-size:13px;opacity:0.7;margin-bottom:20px;">Play a Nope card to cancel it, or let it pass.</p>
+            <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
+                <button class="combo-choice-btn" id="nopeBtn" onclick="playNope()" style="background:#c0392b;padding:10px 20px;font-size:14px;">🚫 Play Nope!</button>
+                <button class="combo-choice-btn" onclick="letItPass()" style="background:#27ae60;padding:10px 20px;font-size:14px;">✓ Let It Pass</button>
+            </div>
+        </div>
+    </div>
+
     <script>
+        // ── constants ──────────────────────────────────────────────────────────
         const CARD_TYPES = {
             EXPLODING: 'Exploding Kitten',
             DEFUSE: 'Defuse',
@@ -819,13 +886,6 @@
             CARD_TYPES.RAINBOW_CAT
         ];
 
-        const STEALABLE_TYPES = [
-            CARD_TYPES.DEFUSE, CARD_TYPES.SKIP, CARD_TYPES.ATTACK, CARD_TYPES.FAVOR,
-            CARD_TYPES.SHUFFLE, CARD_TYPES.PEEK, CARD_TYPES.NOPE,
-            CARD_TYPES.TACOCAT, CARD_TYPES.CATTERMELON, CARD_TYPES.BEARD_CAT,
-            CARD_TYPES.HAIRY_POTATO_CAT, CARD_TYPES.RAINBOW_CAT
-        ];
-
         const GAME_STATE_KEY = 'exploding_kittens_gamestate';
         const GAME_META_KEY = 'exploding_kittens_game';
 
@@ -833,6 +893,7 @@
         let selectedCardIndices = new Set();
         let localPeekMessage = null;
         let pendingComboData = null;
+        let pendingDefuseData = null;
 
         function isCatCard(type) {
             return CAT_CARD_TYPES.includes(type);
@@ -887,7 +948,7 @@
                 } else {
                     document.getElementById('waitingText').textContent = 'Waiting for opponent to initialize game...';
                     let pollAttempts = 0;
-                    const maxPolls = 60; // 30 seconds timeout (60 * 500ms)
+                    const maxPolls = 60;
                     let interval;
                     
                     const checkGameState = () => {
@@ -906,7 +967,6 @@
                     
                     interval = setInterval(checkGameState, 500);
                     
-                    // Also listen for storage changes immediately
                     const storageListener = (e) => {
                         if (e.key === GAME_STATE_KEY) {
                             const newState = readGameState();
@@ -928,11 +988,31 @@
             window.addEventListener('storage', (e) => {
                 if (e.key === GAME_STATE_KEY) {
                     const newState = readGameState();
-                    if (newState) {
-                        selectedCardIndices.clear();
-                        localPeekMessage = null;
-                        renderUI(newState);
+                    if (!newState) return;
+
+                    // Opponent played something — show Nope popup (or auto-pass if no Nope)
+                    if (newState.pendingAction && !newState.pendingAction.resolved &&
+                        newState.pendingAction.playedBy !== myPlayerNum) {
+                        const hand = getMyHand(newState);
+                        if (hand.some(c => c.type === CARD_TYPES.NOPE)) {
+                            showNopePopup(newState);
+                        } else {
+                            letItPass();
+                        }
+                        return;
                     }
+
+                    // Our pending action was resolved by opponent — execute it
+                    if (newState.pendingAction && newState.pendingAction.resolved &&
+                        newState.pendingAction.playedBy === myPlayerNum) {
+                        localPeekMessage = null;
+                        executePendingAction(newState);
+                        return;
+                    }
+
+                    selectedCardIndices.clear();
+                    localPeekMessage = null;
+                    renderUI(newState);
                 }
             });
         }
@@ -947,29 +1027,32 @@
         }
 
         function createInitialGameState(meta) {
-            const deck = createDeck();
-            const explodingCards = deck.filter(c => c.type === CARD_TYPES.EXPLODING);
-            const nonExploding = shuffleArray(deck.filter(c => c.type !== CARD_TYPES.EXPLODING));
+            const fullDeck = createDeck(); // 32 cards
 
-            const player1Hand = [{ type: CARD_TYPES.DEFUSE }];
-            const player2Hand = [{ type: CARD_TYPES.DEFUSE }];
+            // Step 1-2: pull out the EK and all 3 Defuse cards
+            const explodingKitten = fullDeck.find(c => c.type === CARD_TYPES.EXPLODING);
+            const defuses = fullDeck.filter(c => c.type === CARD_TYPES.DEFUSE); // exactly 3
+            let pool = shuffleArray(fullDeck.filter(
+                c => c.type !== CARD_TYPES.EXPLODING && c.type !== CARD_TYPES.DEFUSE
+            )); // 28 cards
 
-            let defusesRemoved = 0;
-            const pool = nonExploding.filter(c => {
-                if (c.type === CARD_TYPES.DEFUSE && defusesRemoved < 2) {
-                    defusesRemoved++;
-                    return false;
-                }
-                return true;
-            });
+            // Step 3: give 1 Defuse to each player; hold the 3rd aside until after dealing
+            const player1Hand = [defuses[0]];
+            const player2Hand = [defuses[1]];
+            // pool is already non-EK, non-Defuse (28 cards) — deal only from this
+            // so neither player can accidentally receive a 2nd Defuse during the deal
 
-            for (let i = 0; i < 6; i++) {
+            // Step 4: deal 7 cards each from the non-Defuse pool (8 total per player)
+            for (let i = 0; i < 7; i++) {
                 player1Hand.push(pool.pop());
                 player2Hand.push(pool.pop());
             }
+            // pool now has 14 cards remaining; add the 3rd Defuse back for the draw pile
+            const drawPool = shuffleArray([...pool, defuses[2]]); // 15 cards
 
+            // Step 5: shuffle the EK back into the draw pile
             return {
-                deck: shuffleArray([...pool, ...explodingCards]),
+                deck: shuffleArray([...drawPool, explodingKitten]),
                 playedPile: [],
                 player1Hand,
                 player2Hand,
@@ -985,25 +1068,27 @@
                 messageType: 'info',
                 initialized: true,
                 favorCardActive: false,
-                favorFromPlayer: null
+                favorFromPlayer: null,
+                pendingAction: null
             };
         }
 
         function createDeck() {
             const deck = [];
-            for (let i = 0; i < 4; i++) deck.push({ type: CARD_TYPES.EXPLODING });
-            for (let i = 0; i < 6; i++) deck.push({ type: CARD_TYPES.DEFUSE });
-            for (let i = 0; i < 4; i++) deck.push({ type: CARD_TYPES.SKIP });
-            for (let i = 0; i < 4; i++) deck.push({ type: CARD_TYPES.ATTACK });
-            for (let i = 0; i < 4; i++) deck.push({ type: CARD_TYPES.FAVOR });
-            for (let i = 0; i < 4; i++) deck.push({ type: CARD_TYPES.SHUFFLE });
-            for (let i = 0; i < 4; i++) deck.push({ type: CARD_TYPES.PEEK });
-            for (let i = 0; i < 4; i++) deck.push({ type: CARD_TYPES.NOPE });
-            for (let i = 0; i < 4; i++) deck.push({ type: CARD_TYPES.TACOCAT });
-            for (let i = 0; i < 4; i++) deck.push({ type: CARD_TYPES.CATTERMELON });
-            for (let i = 0; i < 4; i++) deck.push({ type: CARD_TYPES.BEARD_CAT });
-            for (let i = 0; i < 4; i++) deck.push({ type: CARD_TYPES.HAIRY_POTATO_CAT });
-            for (let i = 0; i < 4; i++) deck.push({ type: CARD_TYPES.RAINBOW_CAT });
+            // Official 2-player deck — 32 cards total
+            deck.push({ type: CARD_TYPES.EXPLODING });                          // 1
+            for (let i = 0; i < 3; i++) deck.push({ type: CARD_TYPES.DEFUSE }); // 3
+            for (let i = 0; i < 2; i++) deck.push({ type: CARD_TYPES.ATTACK }); // 2
+            for (let i = 0; i < 3; i++) deck.push({ type: CARD_TYPES.SKIP });   // 3
+            for (let i = 0; i < 3; i++) deck.push({ type: CARD_TYPES.FAVOR });  // 3
+            for (let i = 0; i < 3; i++) deck.push({ type: CARD_TYPES.PEEK });   // 3
+            for (let i = 0; i < 2; i++) deck.push({ type: CARD_TYPES.SHUFFLE });// 2
+            for (let i = 0; i < 3; i++) deck.push({ type: CARD_TYPES.NOPE });   // 3
+            for (let i = 0; i < 4; i++) deck.push({ type: CARD_TYPES.TACOCAT });            // 4
+            for (let i = 0; i < 4; i++) deck.push({ type: CARD_TYPES.CATTERMELON });       // 4
+            for (let i = 0; i < 4; i++) deck.push({ type: CARD_TYPES.BEARD_CAT });         // 4
+            for (let i = 0; i < 4; i++) deck.push({ type: CARD_TYPES.HAIRY_POTATO_CAT });  // 4
+            for (let i = 0; i < 4; i++) deck.push({ type: CARD_TYPES.RAINBOW_CAT });       // 4
             return shuffleArray(deck);
         }
 
@@ -1046,7 +1131,7 @@
             const hand = getMyHand(state);
             const card = hand[index];
             if (!card || card.type === CARD_TYPES.EXPLODING) return;
-            if (card.type === CARD_TYPES.DEFUSE && !hand.some(c => c.type === CARD_TYPES.EXPLODING)) return;
+
             if (selectedCardIndices.has(index)) {
                 selectedCardIndices.delete(index);
             } else {
@@ -1055,35 +1140,11 @@
             renderUI(state);
         }
 
-        function giveCardForFavor(index) {
-            const state = readGameState();
-            // Only opponent can give a card
-            if (myPlayerNum === state.favorFromPlayer) return;
-            
-            const opponentHand = getOpponentHand(state);
-            const myHand = getMyHand(state);
-            
-            if (index < 0 || index >= myHand.length) return;
-
-            const givenCard = myHand.splice(index, 1)[0];
-            opponentHand.push(givenCard);
-            setMyHand(state, myHand);
-            setOpponentHand(state, opponentHand);
-            
-            // Clear favor state - the player who played the favor continues their turn
-            state.favorCardActive = false;
-            const playerName = state.favorFromPlayer === 1 ? state.player1Name : state.player2Name;
-            state.message = `${playerName} used FAVOR and received a card!`;
-            state.messageType = 'success';
-            
-            writeGameState(state);
-            renderUI(state);
-        }
-
         function playSelectedCards() {
             if (selectedCardIndices.size === 0) return;
             const state = readGameState();
             if (!isMyTurn(state)) return;
+            if (state.pendingAction && !state.pendingAction.resolved) return;
 
             const myHand = getMyHand(state);
             const combo = getValidCombo(selectedCardIndices, myHand);
@@ -1094,9 +1155,93 @@
             if (combo === 'single') {
                 const card = myHand.splice(sortedIndices[0], 1)[0];
                 state.playedPile.push(card);
-                const effect = executeCardEffect(card.type, state);
                 selectedCardIndices.clear();
+                setMyHand(state, myHand);
+                state.pendingAction = { type: 'single', cardType: card.type, playedBy: myPlayerNum, resolved: false, noped: false };
+                state.message = `${getMyName(state)} played ${getCardEmoji(card.type)} ${card.type} — waiting for opponent...`;
+                state.messageType = 'info';
+                writeGameState(state);
+                renderUI(state);
+            } else if (combo === 'pair' || combo === 'triple' || combo === 'fiveCombo') {
+                const catType = myHand[sortedIndices[0]].type;
+                for (const i of sortedIndices) state.playedPile.push(myHand.splice(i, 1)[0]);
+                selectedCardIndices.clear();
+                setMyHand(state, myHand);
+                const comboLabel = combo === 'pair' ? 'Cat Pair' : combo === 'triple' ? 'Three of a Kind' : 'Five Different Cats';
+                state.pendingAction = { type: combo, cardType: catType, playedBy: myPlayerNum, resolved: false, noped: false };
+                state.message = `${getMyName(state)} played ${comboLabel} — waiting for opponent...`;
+                state.messageType = 'info';
+                writeGameState(state);
+                renderUI(state);
+            }
+        }
 
+        // ── Nope mechanic ──────────────────────────────────────────────────────
+
+        function getActionDisplayName(action) {
+            if (action.type === 'single') return `${getCardEmoji(action.cardType)} ${action.cardType}`;
+            if (action.type === 'pair') return '🐱 Cat Pair';
+            if (action.type === 'triple') return '🐱 Three of a Kind';
+            if (action.type === 'fiveCombo') return '🌈 Five Different Cats';
+            return 'Unknown action';
+        }
+
+        function showNopePopup(state) {
+            const myHand = getMyHand(state);
+            const hasNope = myHand.some(c => c.type === CARD_TYPES.NOPE);
+            const playedByName = state.pendingAction.playedBy === 1 ? state.player1Name : state.player2Name;
+            document.getElementById('nopeActionDesc').textContent =
+                `${playedByName} played ${getActionDisplayName(state.pendingAction)}`;
+            const nopeBtn = document.getElementById('nopeBtn');
+            nopeBtn.disabled = !hasNope;
+            nopeBtn.style.opacity = hasNope ? '1' : '0.5';
+            nopeBtn.title = hasNope ? '' : 'You have no Nope cards';
+            document.getElementById('nopeModal').classList.add('active');
+        }
+
+        function playNope() {
+            document.getElementById('nopeModal').classList.remove('active');
+            const state = readGameState();
+            if (!state || !state.pendingAction || state.pendingAction.resolved) return;
+            const myHand = getMyHand(state);
+            const nopeIdx = myHand.findIndex(c => c.type === CARD_TYPES.NOPE);
+            if (nopeIdx === -1) return;
+            const nopeCard = myHand.splice(nopeIdx, 1)[0];
+            state.playedPile.push(nopeCard);
+            setMyHand(state, myHand);
+            state.pendingAction.resolved = true;
+            state.pendingAction.noped = true;
+            const playedByName = state.pendingAction.playedBy === 1 ? state.player1Name : state.player2Name;
+            state.message = `${getMyName(state)} played 🚫 NOPE! ${playedByName}'s action was cancelled!`;
+            state.messageType = 'warning';
+            writeGameState(state);
+            renderUI(state);
+        }
+
+        function letItPass() {
+            document.getElementById('nopeModal').classList.remove('active');
+            const state = readGameState();
+            if (!state || !state.pendingAction || state.pendingAction.resolved) return;
+            state.pendingAction.resolved = true;
+            state.pendingAction.noped = false;
+            writeGameState(state);
+            renderUI(state);
+        }
+
+        function executePendingAction(state) {
+            const action = state.pendingAction;
+            state.pendingAction = null;
+
+            if (action.noped) {
+                state.message = `Your ${getActionDisplayName(action)} was 🚫 Noped!`;
+                state.messageType = 'warning';
+                writeGameState(state);
+                renderUI(state);
+                return;
+            }
+
+            if (action.type === 'single') {
+                const effect = executeCardEffect(action.cardType, state);
                 const opponentNum = myPlayerNum === 1 ? 2 : 1;
                 if (effect === 'attack') {
                     state.currentPlayer = opponentNum;
@@ -1106,7 +1251,7 @@
                 } else if (effect === 'skip') {
                     state.turnsRemaining--;
                     if (state.turnsRemaining > 0) {
-                        state.message = `${getMyName(state)} played SKIP! Skipped one draw, still has turns remaining!`;
+                        state.message = `${getMyName(state)} played SKIP! Still ${state.turnsRemaining} turn(s) remaining!`;
                         state.messageType = 'info';
                     } else {
                         state.currentPlayer = opponentNum;
@@ -1121,43 +1266,61 @@
                     state.message = `${getMyName(state)} played See the Future`;
                     state.messageType = 'info';
                 } else if (effect === 'favor') {
-                    state.message = `${getMyName(state)} played FAVOR!`;
+                    state.message = `${getMyName(state)} played FAVOR! Opponent must give a card!`;
                     state.messageType = 'success';
                 } else {
-                    state.message = `${getMyName(state)} played ${card.type}`;
+                    state.message = `${getMyName(state)} played ${action.cardType}`;
                     state.messageType = 'success';
                 }
-                setMyHand(state, myHand);
                 writeGameState(state);
                 renderUI(state);
-            } else if (combo === 'pair') {
-                executePairCombo(state, myHand, sortedIndices);
-            } else if (combo === 'triple') {
-                executeTripleCombo(state, myHand, sortedIndices);
-            } else if (combo === 'fiveCombo') {
-                executeFiveCombo(state, myHand, sortedIndices);
+            } else if (action.type === 'pair') {
+                showPairStealModal(state);
+            } else if (action.type === 'triple') {
+                showTripleStealModal(state);
+            } else if (action.type === 'fiveCombo') {
+                showFiveStealModal(state);
             }
         }
 
-        function executePairCombo(state, myHand, sortedIndices) {
-            const opponentHand = getOpponentHand(state);
-            for (const i of sortedIndices) state.playedPile.push(myHand.splice(i, 1)[0]);
+        // ── cat combo steal modals ─────────────────────────────────────────────
 
+        function showPairStealModal(state) {
+            const opponentHand = getOpponentHand(state);
+            const myHand = getMyHand(state);
             if (opponentHand.length === 0) {
-                selectedCardIndices.clear();
-                state.message = `${getMyName(state)} played a Cat Pair but opponent has no cards!`;
+                state.message = 'Cat Pair: opponent has no cards to steal!';
                 state.messageType = 'info';
-                setMyHand(state, myHand);
                 writeGameState(state);
                 renderUI(state);
                 return;
             }
+            pendingComboData = { state, myHand, sortedIndices: [] };
+            const choicesDiv = document.getElementById('pairCardChoices');
+            choicesDiv.innerHTML = '';
+            for (let i = 0; i < opponentHand.length; i++) {
+                const btn = document.createElement('button');
+                btn.className = 'combo-choice-btn face-down-card';
+                btn.textContent = '🂠';
+                btn.onclick = () => resolvePairCombo(i);
+                choicesDiv.appendChild(btn);
+            }
+            document.querySelector('#pairComboModal .combo-cancel-btn').style.display = 'none';
+            document.getElementById('pairComboModal').classList.add('active');
+        }
 
-            const stolenCard = opponentHand.splice(Math.floor(Math.random() * opponentHand.length), 1)[0];
+        function resolvePairCombo(cardIndex) {
+            document.getElementById('pairComboModal').classList.remove('active');
+            document.querySelector('#pairComboModal .combo-cancel-btn').style.display = '';
+            const { state, myHand, sortedIndices } = pendingComboData;
+            pendingComboData = null;
+            const opponentHand = getOpponentHand(state);
+            for (const i of sortedIndices) state.playedPile.push(myHand.splice(i, 1)[0]);
+            const stolenCard = opponentHand.splice(cardIndex, 1)[0];
             myHand.push(stolenCard);
             selectedCardIndices.clear();
-            localPeekMessage = `Cat Pair! You randomly stole: ${getCardEmoji(stolenCard.type)} ${stolenCard.type}`;
-            state.message = `${getMyName(state)} played a Cat Pair and randomly stole a card!`;
+            localPeekMessage = `Cat Pair! You stole: ${getCardEmoji(stolenCard.type)} ${stolenCard.type}`;
+            state.message = `${getMyName(state)} played a Cat Pair and stole a card!`;
             state.messageType = 'success';
             setMyHand(state, myHand);
             setOpponentHand(state, opponentHand);
@@ -1165,62 +1328,62 @@
             renderUI(state);
         }
 
-        function executeTripleCombo(state, myHand, sortedIndices) {
-            pendingComboData = { state, myHand, sortedIndices };
-            const choicesDiv = document.getElementById('tripleCardChoices');
-            choicesDiv.innerHTML = '';
-            for (const type of STEALABLE_TYPES) {
-                const btn = document.createElement('button');
-                btn.className = 'combo-choice-btn';
-                btn.textContent = getCardEmoji(type) + ' ' + type;
-                btn.onclick = () => resolveTripleCombo(type);
-                choicesDiv.appendChild(btn);
-            }
-            document.getElementById('tripleComboModal').classList.add('active');
-        }
-
-        function resolveTripleCombo(namedType) {
-            document.getElementById('tripleComboModal').classList.remove('active');
-            const { state, myHand, sortedIndices } = pendingComboData;
-            pendingComboData = null;
+        function showTripleStealModal(state) {
             const opponentHand = getOpponentHand(state);
-            for (const i of sortedIndices) state.playedPile.push(myHand.splice(i, 1)[0]);
-
-            const cardIdx = opponentHand.findIndex(c => c.type === namedType);
-            if (cardIdx !== -1) {
-                myHand.push(opponentHand.splice(cardIdx, 1)[0]);
-                localPeekMessage = `Three of a Kind! Stole: ${getCardEmoji(namedType)} ${namedType}`;
-                state.message = `${getMyName(state)} played Three of a Kind and stole a ${namedType}!`;
-                state.messageType = 'success';
-                setOpponentHand(state, opponentHand);
-            } else {
-                localPeekMessage = `Three of a Kind! Opponent had no ${namedType}.`;
-                state.message = `${getMyName(state)} played Three of a Kind — opponent had no ${namedType}!`;
+            const myHand = getMyHand(state);
+            if (opponentHand.length === 0) {
+                state.message = 'Three of a Kind: opponent has no cards to steal!';
                 state.messageType = 'info';
-            }
-            selectedCardIndices.clear();
-            setMyHand(state, myHand);
-            writeGameState(state);
-            renderUI(state);
-        }
-
-        function executeFiveCombo(state, myHand, sortedIndices) {
-            const stealable = state.playedPile
-                .map((c, i) => ({ card: c, idx: i }))
-                .filter(({ card }) => card.type !== CARD_TYPES.EXPLODING);
-
-            if (stealable.length === 0) {
-                for (const i of sortedIndices) state.playedPile.push(myHand.splice(i, 1)[0]);
-                selectedCardIndices.clear();
-                state.message = `${getMyName(state)} played Five Different Cats — discard pile has nothing stealable!`;
-                state.messageType = 'info';
-                setMyHand(state, myHand);
                 writeGameState(state);
                 renderUI(state);
                 return;
             }
+            pendingComboData = { state, myHand, sortedIndices: [] };
+            const choicesDiv = document.getElementById('tripleCardChoices');
+            choicesDiv.innerHTML = '';
+            opponentHand.forEach((card, index) => {
+                const btn = document.createElement('button');
+                btn.className = 'combo-choice-btn';
+                btn.textContent = getCardEmoji(card.type) + ' ' + card.type;
+                btn.onclick = () => resolveTripleCombo(index);
+                choicesDiv.appendChild(btn);
+            });
+            document.querySelector('#tripleComboModal .combo-cancel-btn').style.display = 'none';
+            document.getElementById('tripleComboModal').classList.add('active');
+        }
 
-            pendingComboData = { state, myHand, sortedIndices };
+        function resolveTripleCombo(cardIndex) {
+            document.getElementById('tripleComboModal').classList.remove('active');
+            document.querySelector('#tripleComboModal .combo-cancel-btn').style.display = '';
+            const { state, myHand, sortedIndices } = pendingComboData;
+            pendingComboData = null;
+            const opponentHand = getOpponentHand(state);
+            for (const i of sortedIndices) state.playedPile.push(myHand.splice(i, 1)[0]);
+            const stolenCard = opponentHand.splice(cardIndex, 1)[0];
+            myHand.push(stolenCard);
+            selectedCardIndices.clear();
+            localPeekMessage = `Three of a Kind! You stole: ${getCardEmoji(stolenCard.type)} ${stolenCard.type}`;
+            state.message = `${getMyName(state)} played Three of a Kind and stole a ${stolenCard.type}!`;
+            state.messageType = 'success';
+            setMyHand(state, myHand);
+            setOpponentHand(state, opponentHand);
+            writeGameState(state);
+            renderUI(state);
+        }
+
+        function showFiveStealModal(state) {
+            const myHand = getMyHand(state);
+            const stealable = state.playedPile
+                .map((c, i) => ({ card: c, idx: i }))
+                .filter(({ card }) => card.type !== CARD_TYPES.EXPLODING);
+            if (stealable.length === 0) {
+                state.message = 'Five Different Cats: nothing stealable in discard!';
+                state.messageType = 'info';
+                writeGameState(state);
+                renderUI(state);
+                return;
+            }
+            pendingComboData = { state, myHand, sortedIndices: [] };
             const choicesDiv = document.getElementById('fiveCardChoices');
             choicesDiv.innerHTML = '';
             const seen = new Set();
@@ -1233,11 +1396,13 @@
                 btn.onclick = () => resolveFiveCombo(idx);
                 choicesDiv.appendChild(btn);
             }
+            document.querySelector('#fiveComboModal .combo-cancel-btn').style.display = 'none';
             document.getElementById('fiveComboModal').classList.add('active');
         }
 
         function resolveFiveCombo(pileIndex) {
             document.getElementById('fiveComboModal').classList.remove('active');
+            document.querySelector('#fiveComboModal .combo-cancel-btn').style.display = '';
             const { state, myHand, sortedIndices } = pendingComboData;
             pendingComboData = null;
             for (const i of sortedIndices) state.playedPile.push(myHand.splice(i, 1)[0]);
@@ -1256,18 +1421,19 @@
             document.getElementById(modalId).classList.remove('active');
             pendingComboData = null;
             selectedCardIndices.clear();
-            renderUI(readGameState());
+            const state = readGameState();
+            if (state) renderUI(state);
         }
+
+        // ── card effects ───────────────────────────────────────────────────────
 
         function executeCardEffect(cardType, state) {
             if (cardType === CARD_TYPES.ATTACK) return 'attack';
             if (cardType === CARD_TYPES.SKIP) return 'skip';
-
             if (cardType === CARD_TYPES.SHUFFLE) {
                 state.deck = shuffleArray(state.deck);
                 return 'shuffle';
             }
-
             if (cardType === CARD_TYPES.PEEK) {
                 const topCards = state.deck.slice(-Math.min(3, state.deck.length)).reverse();
                 if (topCards.length > 0) {
@@ -1278,20 +1444,44 @@
                 }
                 return 'peek';
             }
-
             if (cardType === CARD_TYPES.FAVOR) {
-                // Set state to wait for opponent to choose a card
                 state.favorCardActive = true;
                 state.favorFromPlayer = state.currentPlayer;
                 return 'favor';
             }
-
             return null;
         }
+
+        // ── favor give ────────────────────────────────────────────────────────
+
+        function giveCardForFavor(index) {
+            const state = readGameState();
+            if (!state.favorCardActive) return;
+            if (myPlayerNum === state.favorFromPlayer) return;
+            const myHand = getMyHand(state);
+            if (index < 0 || index >= myHand.length) return;
+            const opponentHand = getOpponentHand(state);
+            const givenCard = myHand.splice(index, 1)[0];
+            opponentHand.push(givenCard);
+            setMyHand(state, myHand);
+            setOpponentHand(state, opponentHand);
+            const favorPlayer = state.favorFromPlayer;
+            state.favorCardActive = false;
+            state.favorFromPlayer = null;
+            const playerName = favorPlayer === 1 ? state.player1Name : state.player2Name;
+            state.message = `${playerName} received a card from FAVOR!`;
+            state.messageType = 'success';
+            writeGameState(state);
+            renderUI(state);
+        }
+
+        // ── draw & defuse ──────────────────────────────────────────────────────
 
         function drawAndEndTurn() {
             const state = readGameState();
             if (!isMyTurn(state)) return;
+            if (state.pendingAction && !state.pendingAction.resolved) return;
+            if (state.favorCardActive) return;
 
             if (state.deck.length === 0) {
                 state.message = 'Deck is empty!';
@@ -1310,13 +1500,16 @@
                 const defuseIdx = myHand.findIndex(c => c.type === CARD_TYPES.DEFUSE);
                 if (defuseIdx !== -1) {
                     myHand.splice(defuseIdx, 1);
-                    const ekIdx = myHand.indexOf(card);
-                    myHand.splice(ekIdx, 1);
-                    const pos = Math.floor(Math.random() * (state.deck.length + 1));
-                    state.deck.splice(pos, 0, card);
-                    localPeekMessage = `You drew: 💣 Exploding Kitten! Used 🧯 Defuse — survived!`;
-                    state.message = `${getMyName(state)} drew an Exploding Kitten! Used Defuse!`;
-                    state.messageType = 'warning';
+                    myHand.splice(myHand.indexOf(card), 1);
+                    pendingDefuseData = { state, myHand, ekCard: card };
+                    const maxPos = state.deck.length + 1;
+                    const slider = document.getElementById('defusePositionSlider');
+                    slider.min = 1;
+                    slider.max = maxPos;
+                    slider.value = Math.ceil(maxPos / 2);
+                    updateDefuseLabel();
+                    document.getElementById('defuseModal').classList.add('active');
+                    return;
                 } else {
                     state.message = `${getMyName(state)} drew an Exploding Kitten! No Defuse! Game Over!`;
                     state.messageType = 'danger';
@@ -1351,6 +1544,44 @@
             renderUI(state);
         }
 
+        function updateDefuseLabel() {
+            const slider = document.getElementById('defusePositionSlider');
+            const pos = parseInt(slider.value);
+            const max = parseInt(slider.max);
+            let desc = pos === 1 ? ' — Top (drawn next)' : pos === max ? ' — Bottom' : '';
+            document.getElementById('defusePositionLabel').textContent = `Position ${pos}${desc}`;
+        }
+
+        function confirmDefusePosition() {
+            document.getElementById('defuseModal').classList.remove('active');
+            const { state, myHand, ekCard } = pendingDefuseData;
+            pendingDefuseData = null;
+
+            const position = parseInt(document.getElementById('defusePositionSlider').value);
+            const insertIdx = Math.max(0, Math.min(state.deck.length, state.deck.length - position + 1));
+            state.deck.splice(insertIdx, 0, ekCard);
+
+            localPeekMessage = `Defused! 💣 Buried at position ${position} in the deck.`;
+            state.message = `${getMyName(state)} drew an Exploding Kitten! Used Defuse!`;
+            state.messageType = 'warning';
+
+            state.turnsRemaining--;
+            if (state.turnsRemaining > 0) {
+                state.message += `. Still ${state.turnsRemaining} turn(s) remaining!`;
+            } else {
+                const opponentNum = myPlayerNum === 1 ? 2 : 1;
+                state.currentPlayer = opponentNum;
+                state.turnsRemaining = 1;
+            }
+
+            setMyHand(state, myHand);
+            selectedCardIndices.clear();
+            writeGameState(state);
+            renderUI(state);
+        }
+
+        // ── UI helpers ─────────────────────────────────────────────────────────
+
         function showGameOver(winnerName, playerWon) {
             const modal = document.getElementById('gameOverModal');
             const title = document.getElementById('gameOverTitle');
@@ -1368,7 +1599,7 @@
         function goHome() {
             localStorage.removeItem(GAME_META_KEY);
             localStorage.removeItem(GAME_STATE_KEY);
-            window.location.href = 'onlineconnecter.html';
+            window.location.href = 'index.html';
         }
 
         function showMessage(text, type) {
@@ -1415,12 +1646,16 @@
             }
         }
 
+        // ── renderUI ───────────────────────────────────────────────────────────
+
         function renderUI(state) {
             if (!state) return;
 
             const myHand = getMyHand(state);
             const opponentHand = getOpponentHand(state);
             const myTurn = isMyTurn(state);
+            const waitingForNope = state.pendingAction && !state.pendingAction.resolved &&
+                state.pendingAction.playedBy === myPlayerNum;
 
             document.getElementById('playerHandCount').textContent = myHand.length;
             document.getElementById('opponentHandCount').textContent = opponentHand.length;
@@ -1430,6 +1665,8 @@
             if (state.playedPile.length > 0) {
                 const lastCard = state.playedPile[state.playedPile.length - 1];
                 document.getElementById('playedCardType').textContent = getCardEmoji(lastCard.type);
+            } else {
+                document.getElementById('playedCardType').textContent = '—';
             }
 
             document.getElementById('playerStatus').textContent = myTurn ? 'Active' : 'Waiting';
@@ -1437,8 +1674,11 @@
 
             const turnIndicator = document.getElementById('turnIndicator');
             const isFavorActive = state.favorCardActive && myPlayerNum !== state.favorFromPlayer;
-            
-            if (isFavorActive) {
+
+            if (waitingForNope) {
+                turnIndicator.textContent = `Waiting for opponent to respond to your ${getActionDisplayName(state.pendingAction)}...`;
+                turnIndicator.className = 'turn-indicator warning';
+            } else if (isFavorActive) {
                 const playerName = state.favorFromPlayer === 1 ? state.player1Name : state.player2Name;
                 turnIndicator.textContent = `${playerName} played FAVOR! Choose a card to give them!`;
                 turnIndicator.className = 'turn-indicator warning';
@@ -1463,25 +1703,21 @@
 
             const combo = getValidCombo(selectedCardIndices, myHand);
             const playBtn = document.getElementById('playCardBtn');
-            playBtn.disabled = !myTurn || combo === null || state.favorCardActive;
+            const canAct = myTurn && !state.favorCardActive && !waitingForNope;
+            playBtn.disabled = !canAct || combo === null;
             playBtn.textContent = combo === 'pair' ? 'Play Cat Pair'
                 : combo === 'triple' ? 'Play Three Cats'
                 : combo === 'fiveCombo' ? 'Play Five Cats'
                 : 'Play Card';
-            document.getElementById('drawCardBtn').disabled = !myTurn || state.favorCardActive;
-            document.getElementById('drawDeckBtn').style.pointerEvents = (myTurn && !state.favorCardActive) ? 'auto' : 'none';
-            document.getElementById('drawDeckBtn').style.opacity = (myTurn && !state.favorCardActive) ? '1' : '0.5';
+            document.getElementById('drawCardBtn').disabled = !canAct;
+            document.getElementById('drawDeckBtn').style.pointerEvents = canAct ? 'auto' : 'none';
+            document.getElementById('drawDeckBtn').style.opacity = canAct ? '1' : '0.5';
 
             const cardsDiv = document.getElementById('playerCards');
             cardsDiv.innerHTML = '';
-            
+
             if (isFavorActive) {
-                // Show opponent's cards for them to choose from for Favor
-                const handLabel = document.createElement('div');
-                handLabel.className = 'hand-label';
-                handLabel.textContent = 'Choose a card to give:';
                 cardsDiv.parentElement.querySelector('.hand-label').textContent = 'Choose a card to give:';
-                
                 myHand.forEach((card, index) => {
                     const cardDiv = document.createElement('div');
                     cardDiv.className = 'card ' + getCardClass(card.type);
@@ -1491,7 +1727,6 @@
                     cardsDiv.appendChild(cardDiv);
                 });
             } else {
-                // Show my own cards
                 cardsDiv.parentElement.querySelector('.hand-label').textContent = 'Your Hand';
                 myHand.forEach((card, index) => {
                     const cardDiv = document.createElement('div');

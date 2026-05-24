@@ -137,10 +137,10 @@
 
         <div class="input-group">
             <label for="playerName">What's your name?</label>
-            <input 
-                type="text" 
-                id="playerName" 
-                placeholder="Enter your name" 
+            <input
+                type="text"
+                id="playerName"
+                placeholder="Enter your name"
                 maxlength="20"
             >
         </div>
@@ -155,7 +155,6 @@
         const joinBtn = document.getElementById('joinBtn');
         const statusDiv = document.getElementById('status');
 
-        // Use localStorage to simulate a simple queue system
         const QUEUE_KEY = 'exploding_kittens_queue';
         const GAME_KEY = 'exploding_kittens_game';
 
@@ -175,15 +174,12 @@
             disableInput();
             showStatus('<span class="spinner"></span><span class="waiting">Waiting for opponent...</span>');
 
-            // Get or create queue
             let queue = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
 
-            // Check if someone is already waiting
             if (queue.length > 0) {
                 const opponent = queue.shift();
                 localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
 
-                // Create game
                 const gameId = generateGameId();
                 const game = {
                     id: gameId,
@@ -194,16 +190,14 @@
 
                 localStorage.setItem(GAME_KEY, JSON.stringify(game));
                 localStorage.removeItem('exploding_kittens_gamestate');
+                localStorage.setItem(QUEUE_KEY, JSON.stringify([])); // Clear queue to prevent conflicts
 
-                // Notify both players
                 showStatus('<span class="success">✓ Opponent found! Game starting...</span>');
-                
-                // Player 2 navigates
+
                 setTimeout(() => {
                     startGame(gameId, playerName, 2);
                 }, 1500);
             } else {
-                // Add this player to queue
                 const playerData = {
                     name: playerName,
                     joinedAt: new Date().toISOString()
@@ -211,34 +205,58 @@
                 queue.push(playerData);
                 localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
 
-                // Poll for opponent
                 pollForOpponent(playerName);
             }
         }
 
         function pollForOpponent(playerName) {
-            const pollInterval = setInterval(() => {
+            let pollInterval;
+            let hasNavigated = false;
+
+            const checkForGame = () => {
+                if (hasNavigated) return;
+
                 const game = JSON.parse(localStorage.getItem(GAME_KEY));
 
                 if (game && (game.player1 === playerName || game.player2 === playerName)) {
-                    clearInterval(pollInterval);
+                    if (pollInterval) clearInterval(pollInterval);
+                    window.removeEventListener('storage', storageListener);
+                    hasNavigated = true;
+
                     showStatus('<span class="success">✓ Opponent found! Game starting...</span>');
-                    
+
                     const playerNum = game.player1 === playerName ? 1 : 2;
                     setTimeout(() => {
                         startGame(game.id, playerName, playerNum);
                     }, 1500);
                 }
-            }, 500);
+            };
 
-            // Stop polling after 2 minutes
+            // Fire immediately when another tab writes to localStorage (cross-tab)
+            const storageListener = (e) => {
+                if (e.key === GAME_KEY) {
+                    checkForGame();
+                }
+            };
+            window.addEventListener('storage', storageListener);
+
+            pollInterval = setInterval(checkForGame, 500);
+
             setTimeout(() => {
-                clearInterval(pollInterval);
-                if (localStorage.getItem(GAME_KEY) === null) {
-                    enableInput();
-                    showStatus('No opponent found. Try again!', 'error');
-                    
-                    // Remove from queue
+                if (pollInterval) clearInterval(pollInterval);
+                window.removeEventListener('storage', storageListener);
+
+                if (!hasNavigated) {
+                    const game = JSON.parse(localStorage.getItem(GAME_KEY));
+
+                    if (game && !(game.player1 === playerName || game.player2 === playerName)) {
+                        enableInput();
+                        showStatus('Game started without you. Try again!', 'error');
+                    } else if (!game) {
+                        enableInput();
+                        showStatus('No opponent found. Try again!', 'error');
+                    }
+
                     let queue = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
                     queue = queue.filter(p => p.name !== playerName);
                     localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
@@ -254,13 +272,9 @@
             return 'game_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
         }
 
-        function showStatus(message, type = '') {
+        function showStatus(message, type) {
             statusDiv.innerHTML = message;
-            if (type) {
-                statusDiv.className = 'status ' + type;
-            } else {
-                statusDiv.className = 'status';
-            }
+            statusDiv.className = 'status' + (type ? ' ' + type : '');
         }
 
         function disableInput() {
@@ -273,10 +287,25 @@
             joinBtn.disabled = false;
         }
 
-        // Allow joining with Enter key
         playerNameInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 joinGame();
+            }
+        });
+
+        window.addEventListener('load', () => {
+            const queue = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
+            const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
+
+            const freshQueue = queue.filter(p => new Date(p.joinedAt).getTime() > fiveMinutesAgo);
+            if (freshQueue.length !== queue.length) {
+                localStorage.setItem(QUEUE_KEY, JSON.stringify(freshQueue));
+            }
+
+            const game = JSON.parse(localStorage.getItem(GAME_KEY) || 'null');
+            if (game && new Date(game.createdAt).getTime() < (Date.now() - (60 * 60 * 1000))) {
+                localStorage.removeItem(GAME_KEY);
+                localStorage.removeItem('exploding_kittens_gamestate');
             }
         });
     </script>
