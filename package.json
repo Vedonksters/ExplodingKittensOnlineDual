@@ -1,0 +1,13 @@
+{
+  "name": "exploding-kittens-online",
+  "version": "1.0.0",
+  "description": "Exploding Kittens 2-player online game",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.16.0"
+  }
+}

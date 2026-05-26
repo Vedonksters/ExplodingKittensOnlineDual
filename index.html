@@ -155,8 +155,8 @@
         const joinBtn = document.getElementById('joinBtn');
         const statusDiv = document.getElementById('status');
 
-        const QUEUE_KEY = 'exploding_kittens_queue';
-        const GAME_KEY = 'exploding_kittens_game';
+        let socket = null;
+        let hasNavigated = false;
 
         function joinGame() {
             const playerName = playerNameInput.value.trim();
@@ -172,104 +172,44 @@
             }
 
             disableInput();
-            showStatus('<span class="spinner"></span><span class="waiting">Waiting for opponent...</span>');
+            showStatus('<span class="spinner"></span><span class="waiting">Connecting...</span>');
 
-            let queue = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            socket = new WebSocket(`${proto}//${location.host}`);
 
-            if (queue.length > 0) {
-                const opponent = queue.shift();
-                localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+            socket.onopen = () => {
+                showStatus('<span class="spinner"></span><span class="waiting">Waiting for opponent...</span>');
+                socket.send(JSON.stringify({ type: 'join', playerName }));
+            };
 
-                const gameId = generateGameId();
-                const game = {
-                    id: gameId,
-                    player1: opponent.name,
-                    player2: playerName,
-                    createdAt: new Date().toISOString()
-                };
+            socket.onmessage = (event) => {
+                let msg;
+                try { msg = JSON.parse(event.data); } catch { return; }
 
-                localStorage.setItem(GAME_KEY, JSON.stringify(game));
-                localStorage.removeItem('exploding_kittens_gamestate');
-                localStorage.setItem(QUEUE_KEY, JSON.stringify([])); // Clear queue to prevent conflicts
+                if (msg.type === 'waiting') {
+                    showStatus('<span class="spinner"></span><span class="waiting">Waiting for opponent...</span>');
+                }
 
-                showStatus('<span class="success">✓ Opponent found! Game starting...</span>');
-
-                setTimeout(() => {
-                    startGame(gameId, playerName, 2);
-                }, 1500);
-            } else {
-                const playerData = {
-                    name: playerName,
-                    joinedAt: new Date().toISOString()
-                };
-                queue.push(playerData);
-                localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
-
-                pollForOpponent(playerName);
-            }
-        }
-
-        function pollForOpponent(playerName) {
-            let pollInterval;
-            let hasNavigated = false;
-
-            const checkForGame = () => {
-                if (hasNavigated) return;
-
-                const game = JSON.parse(localStorage.getItem(GAME_KEY));
-
-                if (game && (game.player1 === playerName || game.player2 === playerName)) {
-                    if (pollInterval) clearInterval(pollInterval);
-                    window.removeEventListener('storage', storageListener);
+                if (msg.type === 'matched') {
                     hasNavigated = true;
-
-                    showStatus('<span class="success">✓ Opponent found! Game starting...</span>');
-
-                    const playerNum = game.player1 === playerName ? 1 : 2;
+                    showStatus('<span class="success">✓ Opponent found! Starting game...</span>');
                     setTimeout(() => {
-                        startGame(game.id, playerName, playerNum);
-                    }, 1500);
+                        window.location.href = `game.html?player=${msg.playerNum}&gameId=${encodeURIComponent(msg.gameId)}&myName=${encodeURIComponent(msg.myName)}&opponentName=${encodeURIComponent(msg.opponentName)}`;
+                    }, 1000);
                 }
             };
 
-            // Fire immediately when another tab writes to localStorage (cross-tab)
-            const storageListener = (e) => {
-                if (e.key === GAME_KEY) {
-                    checkForGame();
-                }
+            socket.onerror = () => {
+                enableInput();
+                showStatus('Connection error. Is the server running?', 'error');
             };
-            window.addEventListener('storage', storageListener);
 
-            pollInterval = setInterval(checkForGame, 500);
-
-            setTimeout(() => {
-                if (pollInterval) clearInterval(pollInterval);
-                window.removeEventListener('storage', storageListener);
-
+            socket.onclose = () => {
                 if (!hasNavigated) {
-                    const game = JSON.parse(localStorage.getItem(GAME_KEY));
-
-                    if (game && !(game.player1 === playerName || game.player2 === playerName)) {
-                        enableInput();
-                        showStatus('Game started without you. Try again!', 'error');
-                    } else if (!game) {
-                        enableInput();
-                        showStatus('No opponent found. Try again!', 'error');
-                    }
-
-                    let queue = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
-                    queue = queue.filter(p => p.name !== playerName);
-                    localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+                    enableInput();
+                    showStatus('Disconnected. Please try again.', 'error');
                 }
-            }, 120000);
-        }
-
-        function startGame(gameId, playerName, playerNum) {
-            window.location.href = `game.html?player=${playerNum}`;
-        }
-
-        function generateGameId() {
-            return 'game_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            };
         }
 
         function showStatus(message, type) {
@@ -290,22 +230,6 @@
         playerNameInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 joinGame();
-            }
-        });
-
-        window.addEventListener('load', () => {
-            const queue = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
-            const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
-
-            const freshQueue = queue.filter(p => new Date(p.joinedAt).getTime() > fiveMinutesAgo);
-            if (freshQueue.length !== queue.length) {
-                localStorage.setItem(QUEUE_KEY, JSON.stringify(freshQueue));
-            }
-
-            const game = JSON.parse(localStorage.getItem(GAME_KEY) || 'null');
-            if (game && new Date(game.createdAt).getTime() < (Date.now() - (60 * 60 * 1000))) {
-                localStorage.removeItem(GAME_KEY);
-                localStorage.removeItem('exploding_kittens_gamestate');
             }
         });
     </script>

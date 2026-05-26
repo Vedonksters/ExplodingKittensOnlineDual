@@ -886,10 +886,10 @@
             CARD_TYPES.RAINBOW_CAT
         ];
 
-        const GAME_STATE_KEY = 'exploding_kittens_gamestate';
-        const GAME_META_KEY = 'exploding_kittens_game';
-
         let myPlayerNum = null;
+        let gameId = null;
+        let socket = null;
+        let currentState = null;
         let selectedCardIndices = new Set();
         let localPeekMessage = null;
         let pendingComboData = null;
@@ -925,72 +925,47 @@
         function initGame() {
             const params = new URLSearchParams(window.location.search);
             myPlayerNum = parseInt(params.get('player'));
+            gameId = params.get('gameId');
+            const myName = decodeURIComponent(params.get('myName') || 'You');
+            const opponentName = decodeURIComponent(params.get('opponentName') || 'Opponent');
 
-            if (myPlayerNum !== 1 && myPlayerNum !== 2) {
+            if (myPlayerNum !== 1 && myPlayerNum !== 2 || !gameId) {
                 document.getElementById('waitingText').textContent = 'Invalid game link. Return to lobby.';
                 return;
             }
 
-            const meta = JSON.parse(localStorage.getItem(GAME_META_KEY) || '{}');
-            const myName = myPlayerNum === 1 ? meta.player1 : meta.player2;
-            const opponentName = myPlayerNum === 1 ? meta.player2 : meta.player1;
-            document.getElementById('playerName').textContent = myName || 'You';
-            document.getElementById('opponentName').textContent = opponentName || 'Opponent';
+            document.getElementById('playerName').textContent = myName;
+            document.getElementById('opponentName').textContent = opponentName;
 
-            let state = readGameState();
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            socket = new WebSocket(`${proto}//${location.host}`);
 
-            if (!state || !state.initialized) {
-                if (myPlayerNum === 1) {
-                    state = createInitialGameState(meta);
-                    writeGameState(state);
-                    document.getElementById('waitingScreen').classList.remove('active');
-                    renderUI(state);
-                } else {
-                    document.getElementById('waitingText').textContent = 'Waiting for opponent to initialize game...';
-                    let pollAttempts = 0;
-                    const maxPolls = 60;
-                    let interval;
-                    
-                    const checkGameState = () => {
-                        state = readGameState();
-                        pollAttempts++;
-                        
-                        if (state && state.initialized) {
-                            if (interval) clearInterval(interval);
-                            document.getElementById('waitingScreen').classList.remove('active');
-                            renderUI(state);
-                        } else if (pollAttempts >= maxPolls) {
-                            if (interval) clearInterval(interval);
-                            document.getElementById('waitingText').textContent = 'Connection timeout. Please refresh.';
-                        }
-                    };
-                    
-                    interval = setInterval(checkGameState, 500);
-                    
-                    const storageListener = (e) => {
-                        if (e.key === GAME_STATE_KEY) {
-                            const newState = readGameState();
-                            if (newState && newState.initialized) {
-                                if (interval) clearInterval(interval);
-                                window.removeEventListener('storage', storageListener);
-                                document.getElementById('waitingScreen').classList.remove('active');
-                                renderUI(newState);
-                            }
-                        }
-                    };
-                    window.addEventListener('storage', storageListener);
+            socket.onopen = () => {
+                socket.send(JSON.stringify({ type: 'register', gameId, playerNum: myPlayerNum }));
+            };
+
+            socket.onmessage = (event) => {
+                let msg;
+                try { msg = JSON.parse(event.data); } catch { return; }
+
+                if (msg.type === 'registered') {
+                    if (myPlayerNum === 1) {
+                        const state = createInitialGameState({ player1: myName, player2: opponentName });
+                        writeGameState(state);
+                        document.getElementById('waitingScreen').classList.remove('active');
+                        renderUI(state);
+                    } else {
+                        document.getElementById('waitingText').textContent = 'Waiting for game to initialize...';
+                        // Server will push the state once player 1 sends it
+                    }
                 }
-            } else {
-                document.getElementById('waitingScreen').classList.remove('active');
-                renderUI(state);
-            }
 
-            window.addEventListener('storage', (e) => {
-                if (e.key === GAME_STATE_KEY) {
-                    const newState = readGameState();
-                    if (!newState) return;
+                if (msg.type === 'state') {
+                    const newState = msg.state;
+                    if (!newState || !newState.initialized) return;
+                    currentState = newState;
+                    document.getElementById('waitingScreen').classList.remove('active');
 
-                    // Opponent played something — show Nope popup (or auto-pass if no Nope)
                     if (newState.pendingAction && !newState.pendingAction.resolved &&
                         newState.pendingAction.playedBy !== myPlayerNum) {
                         const hand = getMyHand(newState);
@@ -1002,7 +977,6 @@
                         return;
                     }
 
-                    // Our pending action was resolved by opponent — execute it
                     if (newState.pendingAction && newState.pendingAction.resolved &&
                         newState.pendingAction.playedBy === myPlayerNum) {
                         localPeekMessage = null;
@@ -1014,16 +988,38 @@
                     localPeekMessage = null;
                     renderUI(newState);
                 }
-            });
+
+                if (msg.type === 'opponent_disconnected') {
+                    alert('Your opponent disconnected. Returning to lobby.');
+                    window.location.href = 'index.html';
+                }
+
+                if (msg.type === 'error') {
+                    document.getElementById('waitingText').textContent = msg.message || 'Connection error.';
+                }
+            };
+
+            socket.onerror = () => {
+                document.getElementById('waitingText').textContent = 'Connection error. Please refresh.';
+            };
+
+            socket.onclose = () => {
+                if (currentState && !currentState.gameOver) {
+                    document.getElementById('waitingText').textContent = 'Connection lost. Please refresh.';
+                    document.getElementById('waitingScreen').classList.add('active');
+                }
+            };
         }
 
         function readGameState() {
-            try { return JSON.parse(localStorage.getItem(GAME_STATE_KEY)); }
-            catch { return null; }
+            return currentState;
         }
 
         function writeGameState(state) {
-            localStorage.setItem(GAME_STATE_KEY, JSON.stringify(state));
+            currentState = state;
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: 'state', gameId, state }));
+            }
         }
 
         function createInitialGameState(meta) {
@@ -1597,8 +1593,7 @@
         }
 
         function goHome() {
-            localStorage.removeItem(GAME_META_KEY);
-            localStorage.removeItem(GAME_STATE_KEY);
+            if (socket) socket.close();
             window.location.href = 'index.html';
         }
 
